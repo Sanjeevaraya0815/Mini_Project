@@ -1,0 +1,63 @@
+{
+  "feature_groups": {
+    "academic": [
+      "year_of_study",
+      "attendance_pct",
+      "backlogs_count",
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5",
+      "S6",
+      "S7",
+      "S8"
+    ],
+    "skill_based": [
+      "skills_count",
+      "dsa_language",
+      "coding_hours_per_week",
+      "coding_profiles_count"
+    ],
+    "career_oriented": [
+      "internships_count",
+      "certifications_count",
+      "projects_completed",
+      "target_career_domain",
+      "languages_known_count"
+    ],
+    "behavioral": [
+      "communication_rating",
+      "stress_level",
+      "motivation_level"
+    ]
+  },
+  "lstm_sequence_features": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8"
+  ],
+  "dnn_static_features": [
+    "year_of_study",
+    "attendance_pct",
+    "backlogs_count",
+    "skills_count",
+    "dsa_language",
+    "coding_hours_per_week",
+    "coding_profiles_count",
+    "internships_count",
+    "certifications_count",
+    "projects_completed",
+    "target_career_domain",
+    "languages_known_count",
+    "communication_rating",
+    "stress_level",
+    "motivation_level"
+  ],
+  "total_raw_features_used": 23
+}

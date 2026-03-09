@@ -1,0 +1,163 @@
+{
+  "feature_branches": {
+    "feature_groups": {
+      "academic": [
+        "year_of_study",
+        "attendance_pct",
+        "backlogs_count",
+        "S1",
+        "S2",
+        "S3",
+        "S4",
+        "S5",
+        "S6",
+        "S7",
+        "S8"
+      ],
+      "skill_based": [
+        "skills_count",
+        "dsa_language",
+        "coding_hours_per_week",
+        "coding_profiles_count"
+      ],
+      "career_oriented": [
+        "internships_count",
+        "certifications_count",
+        "projects_completed",
+        "target_career_domain",
+        "languages_known_count"
+      ],
+      "behavioral": [
+        "communication_rating",
+        "stress_level",
+        "motivation_level"
+      ]
+    },
+    "lstm_sequence_features": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "S5",
+      "S6",
+      "S7",
+      "S8"
+    ],
+    "dnn_static_features": [
+      "year_of_study",
+      "attendance_pct",
+      "backlogs_count",
+      "skills_count",
+      "dsa_language",
+      "coding_hours_per_week",
+      "coding_profiles_count",
+      "internships_count",
+      "certifications_count",
+      "projects_completed",
+      "target_career_domain",
+      "languages_known_count",
+      "communication_rating",
+      "stress_level",
+      "motivation_level"
+    ],
+    "total_raw_features_used": 23
+  },
+  "hybrid_dnn_lstm": {
+    "accuracy": 0.9740129935032483,
+    "f1_score": 0.9737374783384762,
+    "precision": 0.9739705288098878,
+    "recall": 0.9740129935032483,
+    "rmse": 1.2002990528834239
+  },
+  "decision_tree": {
+    "accuracy": 0.8580709645177411,
+    "f1_score": 0.8579159342198018,
+    "precision": 0.8581169395971527,
+    "recall": 0.8580709645177411,
+    "rmse": 3.6000200533097186
+  },
+  "random_forest": {
+    "accuracy": 0.8840579710144928,
+    "f1_score": 0.8909131384307271,
+    "precision": 0.904112870012714,
+    "recall": 0.8840579710144928,
+    "rmse": 2.4632299467965617
+  },
+  "tuning": {
+    "decision_tree": {
+      "classifier_best_params": {
+        "min_samples_split": 2,
+        "min_samples_leaf": 2,
+        "max_depth": null,
+        "criterion": "entropy",
+        "class_weight": "balanced"
+      },
+      "classifier_cv_f1_weighted": 0.8569713059725107,
+      "regressor_best_params": {
+        "min_samples_split": 4,
+        "min_samples_leaf": 6,
+        "max_depth": 12,
+        "criterion": "squared_error"
+      },
+      "regressor_cv_neg_rmse": -4.255409241106998
+    },
+    "random_forest": {
+      "classifier_best_params": {
+        "n_estimators": 500,
+        "min_samples_split": 4,
+        "min_samples_leaf": 2,
+        "max_features": null,
+        "max_depth": 8,
+        "class_weight": "balanced"
+      },
+      "classifier_cv_f1_weighted": 0.8995699597939378,
+      "regressor_best_params": {
+        "n_estimators": 400,
+        "min_samples_split": 4,
+        "min_samples_leaf": 2,
+        "max_features": null,
+        "max_depth": 16
+      },
+      "regressor_cv_neg_rmse": -2.7598378113090773
+    },
+    "hybrid_dnn_lstm": {
+      "epochs_max": 40,
+      "epochs_ran_best_config": 40,
+      "batch_size": 16,
+      "class_weights": {
+        "0": 8.629989212513484,
+        "1": 2.287021154945683,
+        "2": 0.4086845466155811
+      },
+      "sample_weights_used": false,
+      "callbacks": [
+        "EarlyStopping",
+        "ReduceLROnPlateau"
+      ],
+      "selected_config": {
+        "name": "readiness_focus_v3",
+        "static_units": [
+          128,
+          64
+        ],
+        "lstm_units": 64,
+        "seq_dense_units": 32,
+        "fused_units": 128,
+        "dropout_static": 0.15,
+        "dropout_fused": 0.1,
+        "learning_rate": 0.0007,
+        "loss_weights": {
+          "academic_output": 0.35,
+          "readiness_output": 1.8
+        }
+      },
+      "best_val_readiness_accuracy": 0.9743750095367432
+    }
+  },
+  "accuracy": 0.9740129935032483,
+  "f1_score": 0.9737374783384762,
+  "precision": 0.9739705288098878,
+  "recall": 0.9740129935032483,
+  "rmse": 1.2002990528834239,
+  "dataset_size": 10001
+}

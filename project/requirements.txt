@@ -1,0 +1,14 @@
+streamlit
+mysql-connector-python
+tensorflow
+scikit-learn
+pandas
+numpy
+joblib
+plotly
+PyMuPDF
+spacy
+pytesseract
+Pillow
+python-dotenv
+Faker
