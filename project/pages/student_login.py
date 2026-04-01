@@ -125,7 +125,7 @@ with st.expander("Demo Seeded Student Logins", expanded=False):
         preview_limit = st.slider("Preview rows", min_value=10, max_value=200, value=50, step=10)
         preview_rows = get_seeded_student_logins(limit=preview_limit)
         preview_df = pd.DataFrame(preview_rows)
-        st.dataframe(preview_df, use_container_width=True)
+        st.dataframe(preview_df, width="stretch")
 
         all_rows = get_seeded_student_logins(limit=None)
         all_df = pd.DataFrame(all_rows)
