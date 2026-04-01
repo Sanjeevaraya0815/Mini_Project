@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_users_role_department_year_name ON users (role, department, year_of_study, name);
+CREATE INDEX idx_users_role_email ON users (role, email);
+
 CREATE TABLE IF NOT EXISTS student_profiles (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL UNIQUE,
@@ -86,6 +89,26 @@ CREATE TABLE IF NOT EXISTS predictions (
     feature_importance JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_predictions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_predictions_user_created_at ON predictions (user_id, created_at);
+CREATE INDEX idx_predictions_created_at ON predictions (created_at);
+
+CREATE INDEX idx_certifications_user_created_at ON certifications (user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS student_goals (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL UNIQUE,
+    target_gpa DECIMAL(4,2),
+    target_attendance_pct DECIMAL(5,2),
+    target_coding_hours_per_week DECIMAL(6,2),
+    target_internships_count INT,
+    target_certifications_count INT,
+    target_projects_completed INT,
+    reminder_notes VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_student_goals_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS job_roles (
