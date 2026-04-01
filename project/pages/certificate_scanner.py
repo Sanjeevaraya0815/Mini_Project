@@ -35,6 +35,17 @@ if not st.session_state.get("logged_in") or st.session_state.get("role") != "stu
 user_id = st.session_state["user_id"]
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_certifications(user_id: int):
+	return get_certifications(user_id)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_certificate_text(path: str, modified_at: float):
+	_ = modified_at
+	return extract_certificate_text(path)
+
+
 def verify_certificate_text(text: str) -> bool:
 	text_lower = text.lower()
 	quality_keywords = ["certificate", "awarded", "completed", "course", "issued", "verify"]
@@ -76,7 +87,8 @@ if st.button("Scan Certificate", type="primary"):
 	if not cert_path:
 		st.error("No certificate file found. Upload one or save via Profile Entry.")
 	else:
-		text, supported = extract_certificate_text(cert_path)
+		modified_at = Path(cert_path).stat().st_mtime if Path(cert_path).exists() else 0.0
+		text, supported = _cached_certificate_text(cert_path, modified_at)
 		if not supported:
 			st.error("Unsupported file type.")
 		elif not text.strip():
@@ -88,6 +100,7 @@ if st.button("Scan Certificate", type="primary"):
 				cert_names = ["Verified Certificate"]
 
 			saved_count = save_certification_scan_results(user_id, cert_names if is_valid else [])
+			_cached_certifications.clear()
 
 			c1, c2 = st.columns(2)
 			with c1:
@@ -103,10 +116,10 @@ if st.button("Scan Certificate", type="primary"):
 				st.text(text[:2000])
 
 st.subheader("Saved Certifications")
-cert_rows = get_certifications(user_id)
+cert_rows = _cached_certifications(user_id)
 if cert_rows:
 	cert_df = pd.DataFrame(cert_rows)
-	st.dataframe(cert_df, use_container_width=True)
+	st.dataframe(cert_df, width="stretch")
 	if "verified" in cert_df.columns:
 		summary_df = (
 			cert_df.groupby("verified", as_index=False)
@@ -124,6 +137,6 @@ if cert_rows:
 			title="Certification Verification Mix",
 		)
 		fig.update_layout(template="plotly_dark")
-		st.plotly_chart(fig, use_container_width=True)
+		st.plotly_chart(fig, width="stretch")
 else:
 	st.info("No certification records yet.")
