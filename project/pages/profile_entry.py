@@ -4,7 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from database.db_connect import replace_semester_scores, replace_skills, upsert_student_profile
+from database.db_connect import save_student_profile_bundle
 from utils.navigation import render_sidebar_navigation
 
 
@@ -163,9 +163,7 @@ if submit_btn:
             "certificate_path": cert_path,
         }
 
-        upsert_student_profile(user_id, profile_payload)
-        replace_semester_scores(user_id, semester_scores)
-        replace_skills(user_id, selected_skills)
+        save_student_profile_bundle(user_id, profile_payload, semester_scores, selected_skills)
         st.success("Profile saved successfully.")
     except Exception as exc:
         st.error(f"Failed to save profile: {exc}")
