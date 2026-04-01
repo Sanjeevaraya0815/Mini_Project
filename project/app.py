@@ -5,6 +5,11 @@ import pandas as pd
 from database.db_connect import test_connection
 from utils.navigation import render_sidebar_navigation
 
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_db_status():
+    return test_connection()
+
 st.set_page_config(page_title="Student Performance Predictor", page_icon="🎓", layout="wide")
 render_sidebar_navigation()
 
@@ -43,7 +48,7 @@ if "department" not in st.session_state:
     st.session_state.department = None
 
 with st.expander("System Status", expanded=True):
-    ok, msg = test_connection()
+    ok, msg = _cached_db_status()
     if ok:
         st.success(msg)
     else:
