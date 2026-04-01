@@ -1,12 +1,13 @@
 import os
 import json
 import numpy as np
+from threading import Lock
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 import mysql.connector
-from mysql.connector import Error, errorcode
+from mysql.connector import Error, errorcode, pooling
 
 
 DB_CONFIG = {
@@ -18,6 +19,47 @@ DB_CONFIG = {
 }
 
 _SCHEMA_READY = False
+_INDEX_READY = False
+_AUX_READY = False
+_SCHEMA_LOCK = Lock()
+_INDEX_LOCK = Lock()
+_AUX_LOCK = Lock()
+_POOL_LOCK = Lock()
+_CONNECTION_POOL = None
+
+
+def _get_connection_pool() -> pooling.MySQLConnectionPool:
+    global _CONNECTION_POOL
+    if _CONNECTION_POOL is not None:
+        return _CONNECTION_POOL
+
+    with _POOL_LOCK:
+        if _CONNECTION_POOL is not None:
+            return _CONNECTION_POOL
+
+        pool_size = int(os.getenv("DB_POOL_SIZE", "10"))
+        pool_size = max(1, min(pool_size, 32))
+
+        try:
+            _CONNECTION_POOL = pooling.MySQLConnectionPool(
+                pool_name="student_perf_pool",
+                pool_size=pool_size,
+                pool_reset_session=True,
+                **DB_CONFIG,
+            )
+        except Error as exc:
+            if getattr(exc, "errno", None) == errorcode.ER_BAD_DB_ERROR:
+                _create_database_if_missing()
+                _CONNECTION_POOL = pooling.MySQLConnectionPool(
+                    pool_name="student_perf_pool",
+                    pool_size=pool_size,
+                    pool_reset_session=True,
+                    **DB_CONFIG,
+                )
+            else:
+                raise
+
+    return _CONNECTION_POOL
 
 
 def _create_database_if_missing() -> None:
@@ -40,46 +82,144 @@ def _ensure_schema(conn) -> None:
     if _SCHEMA_READY:
         return
 
-    cursor = conn.cursor()
-    cursor.execute("SHOW TABLES LIKE 'users'")
-    users_exists = cursor.fetchone() is not None
-    cursor.close()
+    with _SCHEMA_LOCK:
+        if _SCHEMA_READY:
+            return
 
-    if users_exists:
+        cursor = conn.cursor()
+        cursor.execute("SHOW TABLES LIKE 'users'")
+        users_exists = cursor.fetchone() is not None
+        cursor.close()
+
+        if users_exists:
+            _SCHEMA_READY = True
+            return
+
+        schema_path = Path(__file__).resolve().with_name("schema.sql")
+        if not schema_path.exists():
+            _SCHEMA_READY = True
+            return
+
+        schema_sql = schema_path.read_text(encoding="utf-8")
+        statements = [stmt.strip() for stmt in schema_sql.split(";") if stmt.strip()]
+
+        cursor = conn.cursor()
+        for statement in statements:
+            cursor.execute(statement)
+        conn.commit()
+        cursor.close()
+
         _SCHEMA_READY = True
+
+
+def _index_exists(conn, table_name: str, index_name: str) -> bool:
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT 1
+        FROM information_schema.statistics
+        WHERE table_schema = %s
+          AND table_name = %s
+          AND index_name = %s
+        LIMIT 1
+        """,
+        (DB_CONFIG.get("database", "student_performance"), table_name, index_name),
+    )
+    exists = cursor.fetchone() is not None
+    cursor.close()
+    return exists
+
+
+def _ensure_indexes(conn) -> None:
+    global _INDEX_READY
+    if _INDEX_READY:
         return
 
-    schema_path = Path(__file__).resolve().with_name("schema.sql")
-    if not schema_path.exists():
-        _SCHEMA_READY = True
+    with _INDEX_LOCK:
+        if _INDEX_READY:
+            return
+
+        index_statements = [
+            (
+                "users",
+                "idx_users_role_department_year_name",
+                "CREATE INDEX idx_users_role_department_year_name ON users (role, department, year_of_study, name)",
+            ),
+            (
+                "users",
+                "idx_users_role_email",
+                "CREATE INDEX idx_users_role_email ON users (role, email)",
+            ),
+            (
+                "predictions",
+                "idx_predictions_user_created_at",
+                "CREATE INDEX idx_predictions_user_created_at ON predictions (user_id, created_at)",
+            ),
+            (
+                "predictions",
+                "idx_predictions_created_at",
+                "CREATE INDEX idx_predictions_created_at ON predictions (created_at)",
+            ),
+            (
+                "certifications",
+                "idx_certifications_user_created_at",
+                "CREATE INDEX idx_certifications_user_created_at ON certifications (user_id, created_at)",
+            ),
+        ]
+
+        cursor = conn.cursor()
+        try:
+            for table_name, index_name, create_sql in index_statements:
+                if not _index_exists(conn, table_name, index_name):
+                    cursor.execute(create_sql)
+            conn.commit()
+            _INDEX_READY = True
+        finally:
+            cursor.close()
+
+
+def _ensure_aux_tables(conn) -> None:
+    global _AUX_READY
+    if _AUX_READY:
         return
 
-    schema_sql = schema_path.read_text(encoding="utf-8")
-    statements = [stmt.strip() for stmt in schema_sql.split(";") if stmt.strip()]
+    with _AUX_LOCK:
+        if _AUX_READY:
+            return
 
-    cursor = conn.cursor()
-    for statement in statements:
-        cursor.execute(statement)
-    conn.commit()
-    cursor.close()
-
-    _SCHEMA_READY = True
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS student_goals (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL UNIQUE,
+                target_gpa DECIMAL(4,2),
+                target_attendance_pct DECIMAL(5,2),
+                target_coding_hours_per_week DECIMAL(6,2),
+                target_internships_count INT,
+                target_certifications_count INT,
+                target_projects_completed INT,
+                reminder_notes VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                CONSTRAINT fk_student_goals_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.commit()
+        cursor.close()
+        _AUX_READY = True
 
 
 @contextmanager
 def get_connection():
     conn = None
     try:
-        try:
-            conn = mysql.connector.connect(**DB_CONFIG)
-        except Error as exc:
-            if getattr(exc, "errno", None) == errorcode.ER_BAD_DB_ERROR:
-                _create_database_if_missing()
-                conn = mysql.connector.connect(**DB_CONFIG)
-            else:
-                raise
+        conn = _get_connection_pool().get_connection()
 
         _ensure_schema(conn)
+        _ensure_indexes(conn)
+        _ensure_aux_tables(conn)
         yield conn
     finally:
         if conn and conn.is_connected():
@@ -217,10 +357,13 @@ def replace_semester_scores(user_id: int, scores: List[float]) -> None:
     INSERT INTO semester_scores (user_id, semester_no, score)
     VALUES (%s, %s, %s)
     """
+    score_rows = [(user_id, idx, score) for idx, score in enumerate(scores, start=1)]
+    if not score_rows:
+        return
+
     with get_connection() as conn:
         cursor = conn.cursor()
-        for idx, score in enumerate(scores, start=1):
-            cursor.execute(insert_query, (user_id, idx, score))
+        cursor.executemany(insert_query, score_rows)
         conn.commit()
         cursor.close()
 
@@ -231,38 +374,197 @@ def replace_skills(user_id: int, skills: List[str]) -> None:
         return
 
     query = "INSERT INTO skills (user_id, skill_name) VALUES (%s, %s)"
+    skill_rows = [(user_id, skill_name) for skill_name in skills]
     with get_connection() as conn:
         cursor = conn.cursor()
-        for skill_name in skills:
-            cursor.execute(query, (user_id, skill_name))
+        cursor.executemany(query, skill_rows)
         conn.commit()
         cursor.close()
 
 
+def save_student_profile_bundle(
+    user_id: int,
+    payload: Dict[str, Any],
+    scores: List[float],
+    skills: List[str],
+) -> None:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            profile_query = """
+            INSERT INTO student_profiles (
+                user_id, attendance_pct, backlogs_count, dsa_language, coding_hours_per_week,
+                coding_profiles, internships_count, certifications_count, projects_completed,
+                target_career_domain, languages_known, communication_rating, stress_level,
+                motivation_level, resume_path, certificate_path
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON DUPLICATE KEY UPDATE
+                attendance_pct = VALUES(attendance_pct),
+                backlogs_count = VALUES(backlogs_count),
+                dsa_language = VALUES(dsa_language),
+                coding_hours_per_week = VALUES(coding_hours_per_week),
+                coding_profiles = VALUES(coding_profiles),
+                internships_count = VALUES(internships_count),
+                certifications_count = VALUES(certifications_count),
+                projects_completed = VALUES(projects_completed),
+                target_career_domain = VALUES(target_career_domain),
+                languages_known = VALUES(languages_known),
+                communication_rating = VALUES(communication_rating),
+                stress_level = VALUES(stress_level),
+                motivation_level = VALUES(motivation_level),
+                resume_path = VALUES(resume_path),
+                certificate_path = VALUES(certificate_path)
+            """
+            profile_params = (
+                user_id,
+                payload["attendance_pct"],
+                payload["backlogs_count"],
+                payload["dsa_language"],
+                payload["coding_hours_per_week"],
+                payload["coding_profiles"],
+                payload["internships_count"],
+                payload["certifications_count"],
+                payload["projects_completed"],
+                payload["target_career_domain"],
+                payload["languages_known"],
+                payload["communication_rating"],
+                payload["stress_level"],
+                payload["motivation_level"],
+                payload["resume_path"],
+                payload["certificate_path"],
+            )
+            cursor.execute(profile_query, profile_params)
+
+            cursor.execute("DELETE FROM semester_scores WHERE user_id = %s", (user_id,))
+            score_rows = [(user_id, idx, score) for idx, score in enumerate(scores, start=1)]
+            if score_rows:
+                cursor.executemany(
+                    """
+                    INSERT INTO semester_scores (user_id, semester_no, score)
+                    VALUES (%s, %s, %s)
+                    """,
+                    score_rows,
+                )
+
+            cursor.execute("DELETE FROM skills WHERE user_id = %s", (user_id,))
+            skill_rows = [(user_id, skill_name) for skill_name in skills]
+            if skill_rows:
+                cursor.executemany(
+                    "INSERT INTO skills (user_id, skill_name) VALUES (%s, %s)",
+                    skill_rows,
+                )
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+
+
 def get_profile_bundle(user_id: int) -> Dict[str, Any]:
-    profile_row = fetch_one(
-        """
-        SELECT attendance_pct, backlogs_count, dsa_language, coding_hours_per_week,
-               coding_profiles, internships_count, certifications_count, projects_completed,
-               target_career_domain, languages_known, communication_rating, stress_level,
-               motivation_level, resume_path, certificate_path
-        FROM student_profiles
-        WHERE user_id = %s
-        """,
-        (user_id,),
-    )
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT attendance_pct, backlogs_count, dsa_language, coding_hours_per_week,
+                   coding_profiles, internships_count, certifications_count, projects_completed,
+                   target_career_domain, languages_known, communication_rating, stress_level,
+                   motivation_level, resume_path, certificate_path
+            FROM student_profiles
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        profile_row = cursor.fetchone()
 
-    score_rows = fetch_all(
-        "SELECT semester_no, score FROM semester_scores WHERE user_id = %s ORDER BY semester_no",
-        (user_id,),
-    )
+        cursor.execute(
+            "SELECT semester_no, score FROM semester_scores WHERE user_id = %s ORDER BY semester_no",
+            (user_id,),
+        )
+        score_rows = cursor.fetchall()
 
-    skill_rows = fetch_all("SELECT skill_name FROM skills WHERE user_id = %s", (user_id,))
+        cursor.execute("SELECT skill_name FROM skills WHERE user_id = %s", (user_id,))
+        skill_rows = cursor.fetchall()
+
+        cursor.execute(
+            """
+            SELECT target_gpa, target_attendance_pct, target_coding_hours_per_week,
+                   target_internships_count, target_certifications_count,
+                   target_projects_completed, reminder_notes, created_at, updated_at
+            FROM student_goals
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        goal_row = cursor.fetchone()
+        cursor.close()
 
     return {
         "profile": profile_row,
         "semester_scores": [row[1] for row in score_rows],
         "skills": [row[0] for row in skill_rows],
+        "goals": goal_row,
+    }
+
+
+def save_student_goals(user_id: int, payload: Dict[str, Any]) -> None:
+    query = """
+    INSERT INTO student_goals (
+        user_id, target_gpa, target_attendance_pct, target_coding_hours_per_week,
+        target_internships_count, target_certifications_count, target_projects_completed,
+        reminder_notes
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    ON DUPLICATE KEY UPDATE
+        target_gpa = VALUES(target_gpa),
+        target_attendance_pct = VALUES(target_attendance_pct),
+        target_coding_hours_per_week = VALUES(target_coding_hours_per_week),
+        target_internships_count = VALUES(target_internships_count),
+        target_certifications_count = VALUES(target_certifications_count),
+        target_projects_completed = VALUES(target_projects_completed),
+        reminder_notes = VALUES(reminder_notes)
+    """
+    execute_query(
+        query,
+        (
+            user_id,
+            payload.get("target_gpa"),
+            payload.get("target_attendance_pct"),
+            payload.get("target_coding_hours_per_week"),
+            payload.get("target_internships_count"),
+            payload.get("target_certifications_count"),
+            payload.get("target_projects_completed"),
+            payload.get("reminder_notes"),
+        ),
+    )
+
+
+def get_student_goals(user_id: int) -> Optional[Dict[str, Any]]:
+    row = fetch_one(
+        """
+        SELECT target_gpa, target_attendance_pct, target_coding_hours_per_week,
+               target_internships_count, target_certifications_count,
+               target_projects_completed, reminder_notes, created_at, updated_at
+        FROM student_goals
+        WHERE user_id = %s
+        """,
+        (user_id,),
+    )
+    if not row:
+        return None
+
+    return {
+        "target_gpa": float(row[0]) if row[0] is not None else None,
+        "target_attendance_pct": float(row[1]) if row[1] is not None else None,
+        "target_coding_hours_per_week": float(row[2]) if row[2] is not None else None,
+        "target_internships_count": int(row[3]) if row[3] is not None else None,
+        "target_certifications_count": int(row[4]) if row[4] is not None else None,
+        "target_projects_completed": int(row[5]) if row[5] is not None else None,
+        "reminder_notes": row[6] or "",
+        "created_at": row[7],
+        "updated_at": row[8],
     }
 
 
@@ -330,8 +632,8 @@ def save_certification_scan_results(user_id: int, cert_names: List[str], issuer:
         INSERT INTO certifications (user_id, cert_name, issuer, verified)
         VALUES (%s, %s, %s, %s)
         """
-        for cert_name in cert_names:
-            cursor.execute(insert_query, (user_id, cert_name, issuer, 1))
+        rows = [(user_id, cert_name, issuer, 1) for cert_name in cert_names]
+        cursor.executemany(insert_query, rows)
         conn.commit()
         cursor.close()
 
@@ -424,13 +726,15 @@ def get_faculty_student_rows(department: str, risk_level: Optional[str] = None) 
             p.created_at
         FROM users u
         LEFT JOIN student_profiles sp ON sp.user_id = u.id
-        LEFT JOIN predictions p ON p.id = (
-            SELECT p2.id
-            FROM predictions p2
-            WHERE p2.user_id = u.id
-            ORDER BY p2.created_at DESC
-            LIMIT 1
-        )
+        LEFT JOIN (
+            SELECT p1.user_id, p1.academic_score, p1.placement_readiness, p1.created_at
+            FROM predictions p1
+            JOIN (
+                SELECT user_id, MAX(created_at) AS max_created_at
+                FROM predictions
+                GROUP BY user_id
+            ) p2 ON p2.user_id = p1.user_id AND p2.max_created_at = p1.created_at
+        ) p ON p.user_id = u.id
         WHERE u.role = 'student'
           AND u.department = %s
           {risk_clause}
@@ -465,9 +769,13 @@ def get_department_analytics(department: str) -> Dict[str, Any]:
     )
     total_students = int(total_students_row[0] if total_students_row else 0)
 
-    predicted_rows = fetch_all(
+    aggregates_row = fetch_one(
         """
-        SELECT latest.placement_readiness, COUNT(*)
+        SELECT
+            COALESCE(SUM(latest.placement_readiness = 'Low'), 0) AS low_count,
+            COALESCE(SUM(latest.placement_readiness = 'Medium'), 0) AS medium_count,
+            COALESCE(SUM(latest.placement_readiness = 'High'), 0) AS high_count,
+            COALESCE(AVG(latest.academic_score), 0) AS avg_score
         FROM (
             SELECT p.user_id, p.placement_readiness, p.academic_score
             FROM predictions p
@@ -479,36 +787,18 @@ def get_department_analytics(department: str) -> Dict[str, Any]:
         ) latest
         JOIN users u ON u.id = latest.user_id
         WHERE u.department = %s AND u.role = 'student'
-        GROUP BY latest.placement_readiness
         """,
         (department,),
     )
-
-    score_row = fetch_one(
-        """
-        SELECT AVG(latest.academic_score)
-        FROM (
-            SELECT p.user_id, p.academic_score
-            FROM predictions p
-            JOIN (
-                SELECT user_id, MAX(created_at) AS max_created_at
-                FROM predictions
-                GROUP BY user_id
-            ) lp ON lp.user_id = p.user_id AND lp.max_created_at = p.created_at
-        ) latest
-        JOIN users u ON u.id = latest.user_id
-        WHERE u.department = %s AND u.role = 'student'
-        """,
-        (department,),
-    )
-
-    readiness_counts = {"Low": 0, "Medium": 0, "High": 0}
-    for readiness, count in predicted_rows:
-        readiness_counts[readiness] = int(count)
+    readiness_counts = {
+        "Low": int(aggregates_row[0] if aggregates_row else 0),
+        "Medium": int(aggregates_row[1] if aggregates_row else 0),
+        "High": int(aggregates_row[2] if aggregates_row else 0),
+    }
 
     return {
         "total_students": total_students,
-        "avg_academic_score": float(score_row[0]) if score_row and score_row[0] is not None else 0.0,
+        "avg_academic_score": float(aggregates_row[3]) if aggregates_row and aggregates_row[3] is not None else 0.0,
         "readiness_counts": readiness_counts,
     }
 
