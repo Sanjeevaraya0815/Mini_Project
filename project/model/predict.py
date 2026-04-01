@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -45,6 +46,7 @@ FEATURE_IMPACT_WEIGHTS = {
 }
 
 
+@lru_cache(maxsize=1)
 def _load_model_assets():
     if not MODEL_PATH.exists() or not PREPROCESSOR_PATH.exists():
         raise FileNotFoundError("Saved model artifacts not found. Run model/train_model.py first.")
