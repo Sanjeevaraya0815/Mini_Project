@@ -34,6 +34,17 @@ if not st.session_state.get("logged_in") or st.session_state.get("role") != "stu
 user_id = st.session_state["user_id"]
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_job_roles():
+	return get_job_roles()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_resume_skills(path: str, modified_at: float):
+	_ = modified_at
+	return parse_resume_skills(path)
+
+
 def compute_resume_strength(extracted_skills, job_roles):
 	if not job_roles:
 		return 0.0, []
@@ -76,8 +87,9 @@ if st.button("Scan Resume", type="primary"):
 		st.error("No resume found. Upload one or save in Profile Entry.")
 	else:
 		try:
-			extracted_skills = parse_resume_skills(resume_path)
-			job_roles = get_job_roles()
+			modified_at = Path(resume_path).stat().st_mtime
+			extracted_skills = _cached_resume_skills(resume_path, modified_at)
+			job_roles = _cached_job_roles()
 			strength_score, matching = compute_resume_strength(extracted_skills, job_roles)
 
 			col1, col2 = st.columns(2)
@@ -107,7 +119,7 @@ if st.button("Scan Resume", type="primary"):
 					for role_name, score, matched_skills in matching
 				]
 				match_df = pd.DataFrame(rows)
-				st.dataframe(match_df, use_container_width=True)
+				st.dataframe(match_df, width="stretch")
 
 				match_fig = px.bar(
 					match_df.head(8),
@@ -118,6 +130,6 @@ if st.button("Scan Resume", type="primary"):
 					title="Top Role Match Scores",
 				)
 				match_fig.update_layout(template="plotly_dark", xaxis_tickangle=-20)
-				st.plotly_chart(match_fig, use_container_width=True)
+				st.plotly_chart(match_fig, width="stretch")
 		except Exception as exc:
 			st.error(f"Resume scanning failed: {exc}")
