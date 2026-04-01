@@ -6,6 +6,15 @@ import plotly.graph_objects as go
 from database.db_connect import get_department_analytics, get_department_prediction_trend, get_faculty_student_rows
 from utils.navigation import render_sidebar_navigation
 
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_department_snapshot(department: str, risk_level: str):
+	risk = risk_level if risk_level in {"Low", "Medium", "High"} else None
+	student_rows = get_faculty_student_rows(department=department, risk_level=risk)
+	analytics = get_department_analytics(department=department)
+	trend_rows = get_department_prediction_trend(department=department, months=6)
+	return student_rows, analytics, trend_rows
+
 st.set_page_config(page_title="Faculty Dashboard", page_icon="🏫", layout="wide")
 render_sidebar_navigation()
 st.title("🏫 Faculty Dashboard")
@@ -71,11 +80,12 @@ if not department:
 	st.stop()
 
 risk_filter = st.selectbox("Filter by Risk Level", ["All", "Low", "Medium", "High", "Not Predicted"], index=0)
-query_risk = risk_filter if risk_filter in {"Low", "Medium", "High"} else None
+refresh_col, _ = st.columns([1, 5])
+with refresh_col:
+	if st.button("Refresh Data"):
+		_cached_department_snapshot.clear()
 
-student_rows = get_faculty_student_rows(department=department, risk_level=query_risk)
-analytics = get_department_analytics(department=department)
-trend_rows = get_department_prediction_trend(department=department, months=6)
+student_rows, analytics, trend_rows = _cached_department_snapshot(department, risk_filter)
 df = _prepare_student_df(student_rows)
 
 if risk_filter == "Not Predicted" and not df.empty:
@@ -83,6 +93,10 @@ if risk_filter == "Not Predicted" and not df.empty:
 
 predicted_count = 0 if df.empty else int((df["Readiness"] != "Not Predicted").sum())
 avg_score_display = float(df["Academic Score"].mean()) if not df.empty else analytics["avg_academic_score"]
+low_count = int(analytics["readiness_counts"].get("Low", 0))
+medium_count = int(analytics["readiness_counts"].get("Medium", 0))
+high_count = int(analytics["readiness_counts"].get("High", 0))
+at_risk_count = low_count + medium_count
 
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -96,6 +110,16 @@ with col2:
 with col3:
 	st.markdown('<div class="metric-card">', unsafe_allow_html=True)
 	st.metric("Students with Predictions", predicted_count)
+	st.markdown("</div>", unsafe_allow_html=True)
+
+col4, col5 = st.columns(2)
+with col4:
+	st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+	st.metric("At Risk Students", at_risk_count)
+	st.markdown("</div>", unsafe_allow_html=True)
+with col5:
+	st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+	st.metric("High Readiness", high_count)
 	st.markdown("</div>", unsafe_allow_html=True)
 
 st.subheader("Readiness Distribution")
@@ -122,7 +146,7 @@ fig.update_layout(template="plotly_dark")
 
 dc1, dc2 = st.columns(2)
 with dc1:
-	st.plotly_chart(fig, use_container_width=True)
+	st.plotly_chart(fig, width="stretch")
 with dc2:
 	donut = go.Figure(
 		data=[
@@ -135,7 +159,7 @@ with dc2:
 		]
 	)
 	donut.update_layout(template="plotly_dark", title="Risk Mix")
-	st.plotly_chart(donut, use_container_width=True)
+	st.plotly_chart(donut, width="stretch")
 
 st.subheader("Department Overview")
 if df.empty:
@@ -151,7 +175,7 @@ else:
 		)
 		year_fig = px.bar(year_count_df, x="Year", y="Students", title="Students by Year")
 		year_fig.update_layout(template="plotly_dark")
-		st.plotly_chart(year_fig, use_container_width=True)
+		st.plotly_chart(year_fig, width="stretch")
 	with o2:
 		year_readiness_df = (
 			df.groupby(["Year", "Readiness"], dropna=False)
@@ -167,7 +191,7 @@ else:
 			title="Readiness by Year",
 		)
 		stacked_fig.update_layout(template="plotly_dark", barmode="stack")
-		st.plotly_chart(stacked_fig, use_container_width=True)
+		st.plotly_chart(stacked_fig, width="stretch")
 
 st.subheader("Prediction Trend (Last 6 Months)")
 if not trend_rows:
@@ -182,7 +206,7 @@ else:
 		title="Monthly Prediction Count",
 	)
 	trend_fig.update_layout(template="plotly_dark", xaxis_title="Month", yaxis_title="Predictions")
-	st.plotly_chart(trend_fig, use_container_width=True)
+	st.plotly_chart(trend_fig, width="stretch")
 
 st.subheader("Students in Department")
 if df.empty:
@@ -205,7 +229,7 @@ else:
 				title="Attendance vs Academic Score",
 			)
 			scatter_fig.update_layout(template="plotly_dark")
-			st.plotly_chart(scatter_fig, use_container_width=True)
+			st.plotly_chart(scatter_fig, width="stretch")
 	with v2:
 		backlog_fig = px.histogram(
 			df,
@@ -215,6 +239,13 @@ else:
 			title="Backlog Distribution by Readiness",
 		)
 		backlog_fig.update_layout(template="plotly_dark")
-		st.plotly_chart(backlog_fig, use_container_width=True)
+		st.plotly_chart(backlog_fig, width="stretch")
 
-	st.dataframe(df.sort_values(["Year", "Name"]), use_container_width=True)
+	st.subheader("At-Risk Students")
+	risk_priority_df = df.copy()
+	risk_priority_df["Risk Rank"] = risk_priority_df["Readiness"].map({"Low": 1, "Medium": 2, "High": 3, "Not Predicted": 2}).fillna(2)
+	risk_priority_df = risk_priority_df.sort_values(["Risk Rank", "Academic Score", "Backlogs", "Attendance %"], ascending=[True, True, False, True])
+	risk_view = risk_priority_df[["Name", "Roll Number", "Year", "Attendance %", "Backlogs", "Academic Score", "Readiness", "Predicted At"]].head(10)
+	st.dataframe(risk_view, width="stretch", hide_index=True)
+
+	st.dataframe(df.sort_values(["Year", "Name"]), width="stretch")
